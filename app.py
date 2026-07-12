@@ -3,20 +3,20 @@ import pandas as pd
 import numpy as np
 import re
 import io
+from collections import Counter
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
-from Bio.Blast import NCBIWWW
-from Bio.Blast import NCBIXML
 from modlamp.descriptors import GlobalDescriptor
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="In Silico Peptide Miner", layout="wide")
-st.title("In Silico Peptide Miner: Antimicrobial Peptide Discovery Pipeline")
-st.markdown("Isolate, profile, and screen short novel peptides for high protease evasion, structural stability, and target binding potential.")
+st.set_page_config(page_title="Therapeutic Peptide Miner", layout="wide")
+st.title("In Silico Therapeutic Peptide Miner")
+st.markdown("Isolate, profile, and perform preliminary computational screening on short peptides for predicted structural stability and target binding potential.")
 
 # --- MODULE 1: INGESTION ---
 def process_sequence(raw_data):
+    """Failsafe parsing for DNA or Protein sequences."""
     seq_str = ""
     if ">" in raw_data:
         records = list(SeqIO.parse(io.StringIO(raw_data.strip()), "fasta"))
@@ -47,6 +47,7 @@ def process_sequence(raw_data):
 # --- MODULE 2 & 3: PROFILING & SCORING ---
 @st.cache_data
 def run_pipeline(protein_list, min_len, max_len):
+    """Cleavage and ExPASy/HemoPI algorithmic screening."""
     peptides = set()
     for seq in protein_list:
         for length in range(min_len, max_len + 1):
@@ -65,14 +66,17 @@ def run_pipeline(protein_list, min_len, max_len):
     df = df[(df['Charge'] > 0) & (df['HydrophRatio'] > -0.5)].copy()
     if df.empty: return df
 
+    # ExPASy Instability
     df['Instability_Index'] = df['Sequence'].apply(lambda x: ProteinAnalysis(x).instability_index())
     df['Stability'] = np.where(df['Instability_Index'] <= 40.0, 'Stable', 'Unstable')
 
+    # Protease Evasion (ExPASy PeptideCutter logic)
     def count_cuts(seq):
         return len(re.findall(r'[KR](?!P)', seq)) + len(re.findall(r'[FWYL](?!P)', seq)) + \
                len(re.findall(r'[AENDYFLIVW]', seq)) + len(re.findall(r'[LFVIAM]', seq))
     df['Cleavage_Sites'] = df['Sequence'].apply(count_cuts)
     
+    # HemoPI SVM Simulation
     def calc_hemo(row):
         z = (row['Charge'] * 0.8) + (row['HydrophRatio'] * 1.5) - 2.5
         return round(1 / (1 + np.exp(-z)), 3)
@@ -81,25 +85,9 @@ def run_pipeline(protein_list, min_len, max_len):
     conditions = [(df['Charge'] >= 2) & (df['HydrophRatio'] > 0.3), (df['Charge'] > 4) & (df['pI'] > 9.0)]
     df['Domain'] = np.select(conditions, ['AMP Potential', 'CPP Potential'], default='Therapeutic Candidate')
     
+    # Isolate elite sequences
     elite_df = df[(df['Stability'] == 'Stable') & (df['Hemo_PROB_Score'] < 0.4) & (df['Cleavage_Sites'] < 10)]
     return elite_df.sort_values(by=['Hemo_PROB_Score', 'Instability_Index'])
-
-# --- MODULE 4: NOVELTY SCORING ---
-def calculate_novelty(sequence):
-    try:
-        result_handle = NCBIWWW.qblast("blastp", "swissprot", sequence, hitlist_size=1)
-        blast_record = NCBIXML.read(result_handle)
-        
-        if len(blast_record.alignments) == 0:
-            return "100% (No hits found in SwissProt)"
-            
-        alignment = blast_record.alignments[0]
-        hsp = alignment.hsps[0]
-        identity = (hsp.identities / hsp.align_length) * 100
-        novelty_score = max(0, 100 - identity)
-        return f"{novelty_score:.1f}%"
-    except Exception as e:
-        return "BLAST Connection Error"
 
 # --- UI LAYOUT ---
 with st.sidebar:
@@ -129,72 +117,95 @@ if st.button("Execute Screening Protocol", type="primary") and raw_fasta:
         st.error("Error: No valid reading frames detected.")
     else:
         st.success(f"Successfully loaded sequence data.")
-        with st.spinner("Applying ExPASy cleavage algorithms and HemoPI parameters..."):
+        with st.spinner("Applying in silico predictive thresholds (ExPASy/HemoPI)..."):
             st.session_state.elite_results = run_pipeline(proteins, min_aa, max_aa)
 
 if not st.session_state.elite_results.empty:
     st.subheader("2. Elite Candidate Yield")
-    st.info("The following sequences passed all in vitro stability and in vivo protease evasion thresholds.")
+    st.info("The following sequences passed the *in silico* predictive thresholds for structural stability and simulated protease evasion.")
+    
     display_cols = ['Sequence', 'Length', 'Charge', 'HydrophRatio', 'Instability_Index', 'Cleavage_Sites', 'Hemo_PROB_Score', 'Domain']
     st.dataframe(st.session_state.elite_results[display_cols])
     
+    # Dynamic Formulation Warning for Cleavage Sites
+    high_cleavage = st.session_state.elite_results[st.session_state.elite_results['Cleavage_Sites'] > 3]
+    if not high_cleavage.empty:
+        st.warning("**Formulation Note:** Sequences with >3 predicted cleavage sites will likely require chemical modification (e.g., D-amino acid substitution) or encapsulation in biocompatible nanocarriers (e.g., Chitosan nanoparticles, liposomes) to prevent rapid *in vivo* degradation.")
+    
     st.markdown("---")
     
-    # --- COMPREHENSIVE PROFILING ---
-    st.subheader("3. Comprehensive Physicochemical Profiling (ExPASy/APD3 Parity)")
-    st.markdown("Select a candidate sequence to generate an isolated 2D descriptor profile.")
+    # --- COMPREHENSIVE PROFILING (APD3 PARITY) ---
+    st.subheader("3. Comprehensive Physicochemical Profiling")
+    st.markdown("Select a candidate sequence to generate an isolated, APD3-style descriptor profile.")
     
     selected_pep = st.selectbox("Target Sequence for Profiling:", st.session_state.elite_results['Sequence'])
     
     if selected_pep:
         pa = ProteinAnalysis(selected_pep)
+        selected_row = st.session_state.elite_results[st.session_state.elite_results['Sequence'] == selected_pep].iloc[0]
         
-        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-        col_m1.metric("Molecular Weight", f"{pa.molecular_weight():.2f} Da")
-        col_m2.metric("Isoelectric Point (pI)", f"{pa.isoelectric_point():.2f}")
-        col_m3.metric("GRAVY Score", f"{pa.gravy():.3f}")
-        col_m4.metric("Instability Index", f"{pa.instability_index():.2f}") 
+        # 1. Boman Index
+        boman_dict = {
+            'L': -4.92, 'I': -4.92, 'V': -3.04, 'F': -2.98, 'C': -2.87,
+            'M': -2.35, 'A': -1.81, 'W': -0.92, 'G': 0.00, 'T': 1.08,
+            'S': 1.13, 'Y': 1.15, 'P': 1.22, 'H': 2.33, 'N': 2.37,
+            'Q': 2.37, 'D': 3.01, 'E': 3.14, 'K': 3.16, 'R': 3.19
+        }
+        boman_index = sum(boman_dict.get(aa, 0) for aa in selected_pep) / len(selected_pep)
         
-        st.markdown("**Amino Acid Composition (%)**")
+        # 2. Extinction Coefficient
+        w_count = selected_pep.count('W')
+        y_count = selected_pep.count('Y')
+        c_count = selected_pep.count('C')
+        ext_coeff = (w_count * 5500) + (y_count * 1490) + ((c_count // 2) * 125)
         
-        # Version-proof standard biochemical calculation for AA frequencies
-        standard_aa = list("ACDEFGHIKLMNPQRSTVWY")
-        aa_comp = {aa: (selected_pep.count(aa) / len(selected_pep)) for aa in standard_aa}
-        
-        aa_df = pd.DataFrame(list(aa_comp.items()), columns=['Amino Acid', 'Frequency']).set_index('Amino Acid')
-        st.bar_chart(aa_df * 100)
+        # 3. Rich Amino Acids
+        counts = Counter(selected_pep)
+        max_count = max(counts.values())
+        rich_aas = ", ".join([aa for aa, count in counts.items() if count == max_count])
+
+        # Dense Text Report
+        st.markdown(f"**The total net charge** = {selected_row['Charge']:.2f}")
+        st.markdown(f"**GRAVY** (Grand Average hydropathy value) = {pa.gravy():.3f}")
+        st.markdown(f"**The molecular weight** of the input peptide = {pa.molecular_weight():.3f} Da")
+        st.markdown(f"Assuming cysteines are paired, the **molar extinction coefficient** of the peptide = {ext_coeff}")
+        st.markdown(f"**Protein-binding Potential (Boman index)** is: {boman_index:.2f} kcal/mol")
+        st.markdown(f"**Your sequence is rich in:** {rich_aas}")
+        st.markdown(f"**Instability index (II)** is computed to be {pa.instability_index():.2f}")
 
     st.markdown("---")
     
-    # --- VALIDATION & DOCKING EXPORT ---
-    st.subheader("4. Structural Validation & Downstream Docking Protocols")
+    # --- NOVELTY & DOWNSTREAM PROTOCOLS ---
+    st.subheader("4. Novelty Verification & Structural Docking")
     col_v1, col_v2 = st.columns(2)
     
     with col_v1:
-        st.markdown("**A. Sequence Homology Verification**")
-        st.info("Query the curated SwissProt database to verify novelty prior to structural modeling.")
-        if st.button("Initiate BLASTp Query"):
-            with st.spinner("Aligning sequence..."):
-                novelty = calculate_novelty(selected_pep)
-                st.success(f"Novelty Score for {selected_pep}: **{novelty}**")
-                
-        st.markdown("**B. Export for 3D Modeling (.FASTA)**")
+        st.markdown("**A. High-Throughput Novelty Screening**")
+        st.info("Web-based BLAST queries throttle heavily for datasets >10 sequences. To verify true novelty for high-yield inputs, execute a Local BLAST+ query.")
+        
         fasta_export = ""
-        for index, row in st.session_state.elite_results.head(50).iterrows():
+        for index, row in st.session_state.elite_results.iterrows():
             fasta_export += f">Candidate_{index+1}|HemoScore_{row['Hemo_PROB_Score']}\n{row['Sequence']}\n"
             
         st.download_button(
-            label="Download .FASTA Output",
+            label="Download .FASTA for Local BLAST & 3D Modeling",
             data=fasta_export,
-            file_name="elite_peptides_structural.fasta",
+            file_name="elite_peptides.fasta",
             mime="text/plain"
         )
         
+        st.markdown("""
+        > **Terminal Protocol for Local Novelty Check:**
+        > 1. Download the target database (e.g., APD3 or UniProt) locally.
+        > 2. Format DB: `makeblastdb -in db.fasta -dbtype prot`
+        > 3. Query: `blastp -query elite_peptides.fasta -db db.fasta -outfmt 6 -evalue 0.05`
+        """)
+        
     with col_v2:
-        st.markdown("**C. In Silico Docking Readiness**")
+        st.markdown("**B. In Silico Docking Readiness**")
         st.markdown(
-            "Once elite candidates are isolated and exported, utilize the following platforms to complete the structural analysis pipeline:\n\n"
-            "*   **3D Structure Generation:** Upload the exported multi-FASTA file directly to [AlphaFold Server](https://alphafoldserver.com/) or [RoseTTAFold](https://robetta.bakerlab.org/) to predict high-accuracy 3D coordinates (.pdb).\n"
-            "*   **Quantum Biological Profiling:** Input the resulting 3D structures into **PySCF** to evaluate electrostatic potentials and HOMO/LUMO energy gaps for stability verification.\n"
-            "*   **Target Molecular Docking:** Convert predicted structures to `.pdbqt` format for binding affinity calculations against pathogenic targets using **AutoDock Vina** or **HADDOCK**."
+            "Once sequence novelty is confirmed, utilize the exported `.fasta` file for structural and energetic profiling:\n\n"
+            "*   **3D Coordinates:** Upload to **AlphaFold Server** or **RoseTTAFold** to predict high-accuracy tertiary structures (.pdb format).\n"
+            "*   **Quantum Profiling:** Input `.pdb` geometries into **PySCF** to evaluate electrostatic potential surfaces and HOMO/LUMO energy gaps.\n"
+            "*   **Molecular Docking:** Convert structures to `.pdbqt` format for binding affinity calculations against therapeutic targets using **AutoDock Vina**."
         )
