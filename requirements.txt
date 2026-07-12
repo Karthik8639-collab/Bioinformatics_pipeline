@@ -1,0 +1,7 @@
+streamlit>=1.30.0
+pandas>=2.1.0
+numpy>=1.26.0
+biopython>=1.83
+modlamp>=4.3.0
+scikit-learn>=1.3.0
+joblib>=1.3.2
