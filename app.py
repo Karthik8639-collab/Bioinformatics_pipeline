@@ -140,7 +140,7 @@ if not st.session_state.elite_results.empty:
     
     st.markdown("---")
     
-    # --- NEW MODULE: COMPREHENSIVE PROFILING ---
+    # --- COMPREHENSIVE PROFILING ---
     st.subheader("3. Comprehensive Physicochemical Profiling (ExPASy/APD3 Parity)")
     st.markdown("Select a candidate sequence to generate an isolated 2D descriptor profile.")
     
@@ -153,16 +153,20 @@ if not st.session_state.elite_results.empty:
         col_m1.metric("Molecular Weight", f"{pa.molecular_weight():.2f} Da")
         col_m2.metric("Isoelectric Point (pI)", f"{pa.isoelectric_point():.2f}")
         col_m3.metric("GRAVY Score", f"{pa.gravy():.3f}")
-        col_m4.metric("Aliphatic Index", f"{pa.instability_index():.2f}") # Approximation via Biopython context
+        col_m4.metric("Instability Index", f"{pa.instability_index():.2f}") 
         
         st.markdown("**Amino Acid Composition (%)**")
-        aa_comp = pa.get_amino_acids_percent()
+        
+        # Version-proof standard biochemical calculation for AA frequencies
+        standard_aa = list("ACDEFGHIKLMNPQRSTVWY")
+        aa_comp = {aa: (selected_pep.count(aa) / len(selected_pep)) for aa in standard_aa}
+        
         aa_df = pd.DataFrame(list(aa_comp.items()), columns=['Amino Acid', 'Frequency']).set_index('Amino Acid')
         st.bar_chart(aa_df * 100)
 
     st.markdown("---")
     
-    # --- NEW MODULE: VALIDATION & DOCKING EXPORT ---
+    # --- VALIDATION & DOCKING EXPORT ---
     st.subheader("4. Structural Validation & Downstream Docking Protocols")
     col_v1, col_v2 = st.columns(2)
     
